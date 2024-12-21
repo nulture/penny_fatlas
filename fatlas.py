@@ -35,12 +35,19 @@ class PathedImage:
 
 
 class SourceImage(PathedImage):
-	def __init__(self, root, file):
+	def __init__(self, root : str, file : str, region : Rect = None):
 		super().__init__(root, file)
+		self.image : Image = Image.open(self.full).convert("RGBA")
 
-		self.image = Image.open(self.full)
-		self.source_region = Rect(0, 0, self.image.width, self.image.height)
+		if region == None:
+			region = Rect(0, 0, self.image.width, self.image.height)
+
+		self.source_region = region
 		self.target_offset = Vec2(0, 0)
+
+	@property
+	def image_cropped(self) -> Image:
+		return self.image.crop((self.source_region.left, self.source_region.top, self.source_region.right, self.source_region.bottom))
 
 
 	@property
@@ -48,12 +55,72 @@ class SourceImage(PathedImage):
 		return Rect(self.target_offset, self.source_region.size)
 
 	
-	def crop_to_new(self, mode):
+	def crop_islands(self, mode : IslandMode, threshold : int = 16):
+		bitmap = self.get_opacity_bitmap(threshold)
+		pixels = bitmap.load()
+		w, h = self.image.size
+		visited = set()
+		rects = []
+
+		def flood_fill(x, y):
+			stack = [(x, y)]
+			island_pixels = []
+
+			while stack:
+				px, py = stack.pop()
+				if (px, py) in visited or px < 0 or py < 0 or px >= w or py >= h:
+					continue
+				if pixels[px, py] == 0:
+					continue
+			
+				visited.add((px, py))
+				island_pixels.append((px, py))
+
+				stack.extend([(px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)])
+			return island_pixels
+		
+		for x in range(w):
+			for y in range(h):
+				if (x, y) not in visited and pixels[x, y] == 1:
+					island = flood_fill(x, y)
+					if island:
+						min_x = min(p[0] for p in island)
+						max_x = max(p[0] for p in island)
+						min_y = min(p[1] for p in island)
+						max_y = max(p[1] for p in island)
+						rects.append(Rect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
+		
+		if not rects: return self
+		match mode:
+			case IslandMode.CROP_FULL: 
+				while len(rects) > 1:
+					rects.insert(0, rects.pop().union(rects.pop()))
+				self.source_region = rects[0]
+				return self
+
+			case IslandMode.CROP_SINGLE:
+				rects.sort(key=lambda rect: rect.w * rect.h, reverse=True)
+				self.source_region = rects[0]
+				return self				
+				
+			case IslandMode.CROP_MANY:
+				pass
+
+		print(f"Found islands: {rects}")
+
 		return self
+	
+		
+	def get_opacity_bitmap(self, threshold: int = 16):
+		bitmap = Image.new("1", self.image.size)
+		pixels = bitmap.load()
 
-
-	def get_size(self) -> Vec2:
-		return Vec2(self.source_region.width, self.source_region.height)
+		for x in range(bitmap.width):
+			for y in range(bitmap.height):
+				_, _, _, a = self.image.getpixel((x, y))
+				pixels[x, y] = 0 if a < threshold else 1
+				
+		return bitmap
 
 
 class TargetImage(PathedImage):
@@ -61,9 +128,9 @@ class TargetImage(PathedImage):
 		super().__init__(root, file)
 
 		self.sources = []
-		self.snaps = [ Vec2(0, 0) ]
+		self.snaps = [ (0, 0) ]
 
-		self.image = Image.new(format, [1, 1])
+		self.image : Image = Image.new(format, [1, 1])
 		self.full_rect : Rect = Rect(0, 0, 1, 1)
 
 
@@ -74,14 +141,13 @@ class TargetImage(PathedImage):
 
 	
 	def add(self, source: SourceImage):
-		size = source.get_size()
+		size = source.source_region.size
 		rect = Rect(self.get_snap_for(size), size)
 
 		if not self.full_rect.contains(rect):
 			self.crop(self.full_rect.union(rect).size)
 
-		self.image.paste(source.image, [rect.x, rect.y])
-		# self.image.pa
+		self.image.paste(source.image_cropped, (rect.x, rect.y))
 		source.target_offset = Vec2(rect.x, rect.y)
 
 		self.sources.append(source)
@@ -103,16 +169,12 @@ class TargetImage(PathedImage):
 		print(f"Added image at {source.target_offset}")
 
 
-
-	def get_snap_for(self, size) -> tuple[int, int]:
+	def get_snap_for(self, size: tuple[int, int]) -> tuple[int, int]:
 		candidates = []
 		for snap in self.snaps:
 			query = Rect(snap, size)
 			intersects = False
 			for source in self.sources:
-				# print(source.target_region)
-				# print(query)
-				# print(source.target_region.colliderect(query))
 				if source.target_region.colliderect(query):
 					intersects = True
 					break
@@ -120,7 +182,7 @@ class TargetImage(PathedImage):
 				candidates.append(query)
 
 		if len(candidates) == 0: return self.snaps[0]
-		candidates.sort(key=lambda a: not self.full_rect.contains(a))
+		candidates.sort(key=lambda rect: not self.full_rect.contains(rect))
 		return [candidates[0].x, candidates[0].y]
 			
 
@@ -132,17 +194,12 @@ class TargetImage(PathedImage):
 		print(f"Saved image!")
 
 
-
 def island_mode(value):
 	try:
 		return IslandMode(value.lower())
 	except ValueError:
 		argparse.ArgumentTypeError(f"Invalid mode. Choose from {[e.value for e in IslandMode]}.")
 
-
-def crop(image, offset):
-	pass
-	
 
 def aggregate_image_sources(source, restrict):
 	result = []
@@ -168,34 +225,38 @@ def main():
 	parser.add_argument("--regex-separate", "-s", type=str, required=False, default=r"", help="File names (not including extension) that match this regex will be separated into different images.")
 	parser.add_argument("--island-crop", "-ic", type=island_mode, required=False, default=IslandMode.NO_CROP, help=f"Defines how/if to separate pixel islands. Options: {[e.value for e in IslandMode]}")
 	parser.add_argument("--island-margin", "-im", type=int, required=False, default=1, help="Islands above this threshold will have their regions expanded by this margin to include any surrounding pixels.")
-	parser.add_argument("--island-opacity", "-io", type=float, required=False, default=0.1, help="Pixels with an opacity above this threshold will be considered part of a contiguous island.")
+	parser.add_argument("--island-opacity", "-io", type=int, required=False, default=16, help="Pixels with an opacity above this threshold will be considered part of a contiguous island.")
+	parser.add_argument("--island-size", "-is", type=int, required=False, default=1, help="Islands with an area smaller than this will be discarded.")
 	args = parser.parse_args()
 
 	sources = aggregate_image_sources(args.source_folder, args.regex_restrict)
 	
 	print(f"Found {len(sources)} images to compile.")
 
-	if args.island_crop != IslandMode.NO_CROP:
-		new_sources = []
-		for source in sources: 
-			new_sources.append(source.crop_to_new(args.island_crop))
-		sources = new_sources
+	# if args.island_crop != IslandMode.NO_CROP:
+	# 	new_sources = []
+	# 	for source in sources: 
+	# 		new_sources.append(source.crop_islands(args.island_crop))
+	# 	sources = new_sources
+	sources[0] = sources[0].crop_islands(args.island_crop)
 
 	target = TargetImage(args.target_folder, args.target_path, args.target_format)
 
-	# i = 0
-	# limit = 8
+	i = 0
+	limit = 1
 	for source in sources:
-		# i += 1
-		# if i > limit: break
+		i += 1
+		if i > limit: break
 		
 		target.add(source)
 		
-
-
 	print(f"Final image size: {target.image.size}")
-
+	target.image.show()
 	target.save()
+
+	# img = sources[0]
+	# img.get_opacity_bitmap()
+	# # img.get_bitmap().save(target.full)
 
 
 if __name__ == "__main__":
