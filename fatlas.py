@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import argparse
+import json
 from PIL import Image, ImageOps
 from enum import Enum
 from pygame import Rect
@@ -29,9 +30,10 @@ class PathedImage:
 	def __str__(self):
 		return self.file
 
-	
-	def crop(self, size):
-		pass
+
+	@property
+	def json_path(self) -> str:
+		return f"{self.root}\\{self.name}.json"
 
 
 class SourceImage(PathedImage):
@@ -45,9 +47,12 @@ class SourceImage(PathedImage):
 
 		self.source_region = region
 		self.target_offset = (0, 0)
+		self.target_match = None
 
 	@property
 	def image_cropped(self) -> Image:
+		if self.bitmap == None: return self.image
+
 		result : Image = self.image.crop((self.source_region.left, self.source_region.top, self.source_region.right, self.source_region.bottom))
 		r, g, b, a = result.split()
 		mask = self.bitmap.convert("L")
@@ -62,10 +67,32 @@ class SourceImage(PathedImage):
 		# self.bitmap.show()
 		return result
 
+	
+	@property
+	def json_data(self) -> dict:
+		return {
+			"name": self.name,
+			"source_offset": {
+				"x": self.source_region.left,
+				"y": self.source_region.top,
+			},
+			"target_region": {
+				"x": int(self.target_offset[0]),
+				"y": int(self.target_offset[1]),
+				"w": self.source_region.width,
+				"h": self.source_region.height,
+			},
+		}
+
 
 	@property
 	def target_region(self) -> Rect:
 		return Rect(self.target_offset, self.source_region.size)
+	
+
+	def add_to_target(self):
+		print(f"Added {self.name} to '{self.target}'")
+		self.target.add(self)
 
 	
 	def crop_islands(self, args):
@@ -243,15 +270,29 @@ def island_mode(value):
 		argparse.ArgumentTypeError(f"Invalid mode. Choose from {[e.value for e in IslandMode]}.")
 
 
-def aggregate_image_sources(source, restrict):
+def assign_image_sources(args):
 	result = []
-	pattern = re.compile(restrict)
-	for root, dirs, files, in os.walk(source):
+	pattern = re.compile(args.regex_restrict)
+	for root, dirs, files, in os.walk(args.source_folder):
 		for file in files:			
 			if re.search(pattern, file) == None: continue
 			source = SourceImage(root, file)
 			result.append(source)
 	return result
+
+
+def assign_image_targets(sources, args):
+	result = []
+	pattern = re.compile(args.regex_separate)
+	targets_dict = dict()
+	for source in sources:
+		match_string = re.search(pattern, source.name).group()
+		if targets_dict.get(match_string) == None:
+			name, ext = os.path.splitext(args.target_path)
+			path = f"{name}{match_string}{ext}"
+			targets_dict[match_string] = TargetImage(args.target_folder, path, args.target_format)
+		source.target_match = match_string
+	return (sources, targets_dict)
 
 
 def main():
@@ -264,42 +305,48 @@ def main():
 	parser.add_argument("target_path", type=str, help="Target template path for each atlas.")
 	parser.add_argument("--target-format", type=str, required=False, default="RGBA", help="Image format.")
 	parser.add_argument("--regex-restrict", "-r", type=str, required=False, default=r".*?\.(?:png)", help="Only file paths that match this regex will be included (considers extensions)." )
-	parser.add_argument("--regex-separate", "-s", type=str, required=False, default=r"", help="File names (not including extension) that match this regex will be separated into different images.")
+	parser.add_argument("--regex-separate", "-s", type=str, required=False, default=r"^", help="File names (not including extension) that match this regex will be separated into different images.")
 	parser.add_argument("--island-mode", "-ic", type=island_mode, required=False, default=IslandMode.NO_CROP, help=f"Defines how/if to separate pixel islands. Options: {[e.value for e in IslandMode]}")
 	parser.add_argument("--island-margin", "-im", type=int, required=False, default=1, help="Islands above this threshold will have their regions expanded by this margin to include any surrounding pixels.")
 	parser.add_argument("--island-opacity", "-io", type=int, required=False, default=1, help="Pixels with an opacity above this threshold will be considered part of a contiguous island.")
 	parser.add_argument("--island-size", "-is", type=int, required=False, default=1, help="Islands with an area smaller than this will be discarded.")
+	parser.add_argument("--test-limit", "-l", type=int, required=False, default=-1, help="If set, the program will only process this many images. Helpful for testing.")
 	args = parser.parse_args()
 
-	sources = aggregate_image_sources(args.source_folder, args.regex_restrict)
-	
+	sources = assign_image_sources(args)
+	sources, targets = assign_image_targets(sources, args)
+
+	target = TargetImage(args.target_folder, args.target_path, args.target_format)
+	json_data = dict()
+
 	print(f"Found {len(sources)} images to compile.")
 
-	limit = 1000
 	print(f"Cropping images...")
-	new_sources = []
 	i = 0
 	for source in sources: 
 		i += 1
-		if i > limit: break
-		print(f"Cropping image '{source.name}' ({i}/{len(sources)})...")
-		new_sources.append(source.crop_islands(args))
-	sources = new_sources
-	print(f"Cropping complete.")
+		if args.test_limit > -1 and i > args.test_limit: break
+		print(f"Cropping image '{source.name}' ({i}/{len(sources)}) ...")
+		subsources = []
+		subsources.append(source.crop_islands(args))
+		j = 0
+		for subsource in subsources:
+			j += 1
+			target_file = targets[source.target_match].file
+			print(f"Appending image '{source.name}' to '{target_file}' ({j}/{len(subsources)}) ...")
+			targets[source.target_match].add(subsource)
 
-	target = TargetImage(args.target_folder, args.target_path, args.target_format)
+			if json_data.get(target_file) == None:
+				json_data[target_file] = []
+			json_data[target_file].append(subsource.json_data)
+	print(f"Conglomeration complete.")
 
-	print(f"Appending images...")
-	i = 0
-	for source in new_sources:
-		i += 1
-		print(f"Adding image ({i}/{len(new_sources)})...")
-		target.add(source)
-	print(f"Appending complete.")
-		
-	print(f"Final image size: {target.image.size}")
-	target.image.show()
-	target.save()
+	with open(target.json_path, "w") as file:
+		json.dump(json_data, file)
+
+	for k in targets.keys():
+		target = targets[k]
+		target.save()
 
 
 if __name__ == "__main__":
