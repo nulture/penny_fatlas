@@ -197,42 +197,47 @@ class SourceImage(PathedImage):
 
 
 class TargetImage(PathedImage):
-	def __init__(self, root, file, format):
+	def __init__(self, root, file, format, margin):
 		super().__init__(root, file)
 
 		self.sources = []
-		self.snaps = [ (0, 0) ]
+		self.margin = (margin, margin)
+		self.snaps = [ self.margin ]
 
 		self.image : Image = Image.new(format, [1, 1])
 		self.full_rect : Rect = Rect(0, 0, 1, 1)
 
 
-	def crop(self, size):
-		self.full_rect.size = size
-		self.image = ImageOps.pad(self.image, size, centering=(0,0))
+	def expand(self, size):
+		new_size = (size[0] + self.margin[0], size[1] + self.margin[1])
+		delta = (0, 0, new_size[0] - self.full_rect.size[0], new_size[1] - self.full_rect.size[1])
+		self.full_rect.size = new_size
+		self.image = ImageOps.expand(self.image, delta)
 
 	
 	def add(self, source: SourceImage):
 		size = source.source_region.size
-		rect = Rect(self.get_snap_for(size), size)
+		snap = self.get_snap_for(size)
+		rect = Rect(snap[0], snap[1], size[0], size[1])
 
 		if not self.full_rect.contains(rect):
-			self.crop(self.full_rect.union(rect).size)
+			self.expand(self.full_rect.union(rect).size)
 
 		self.image.paste(source.image_cropped, (rect.x, rect.y))
-		source.target_offset = Vec2(rect.x, rect.y)
+		source.target_offset = (rect.x, rect.y)
 
 		self.sources.append(source)
 
 		try:
 			self.snaps.remove(source.target_offset)
 		except ValueError: pass
-		snap1 = source.target_offset + Vec2(source.source_region.width, 0)
+		snap1 = (source.target_offset[0] + source.source_region.width + self.margin[0], source.target_offset[1])
 		try:
 			_ = self.snaps.index(snap1)
 		except ValueError:
 			self.snaps.append(snap1)
-		snap2 = source.target_offset + Vec2(0, source.source_region.height)
+		snap2 = (source.target_offset[0], source.target_offset[1] + source.source_region.height + self.margin[1])
+		# snap2 = source.target_offset + (0, source.source_region.height + self.margin[1])
 		try:
 			_ = self.snaps.index(snap2)
 		except ValueError:
@@ -242,7 +247,7 @@ class TargetImage(PathedImage):
 	def get_snap_for(self, size: tuple[int, int]) -> tuple[int, int]:
 		candidates = []
 		for snap in self.snaps:
-			query = Rect(snap, size)
+			query = Rect(snap[0], snap[1], size[0], size[1])
 			intersects = False
 			for source in self.sources:
 				if source.target_region.colliderect(query):
@@ -253,7 +258,7 @@ class TargetImage(PathedImage):
 
 		if len(candidates) == 0: return self.snaps[0]
 		candidates.sort(key=lambda rect: not self.full_rect.contains(rect))
-		return [candidates[0].x, candidates[0].y]
+		return (candidates[0][0], candidates[0][1])
 
 	
 	def save(self):
@@ -290,7 +295,7 @@ def assign_image_targets(sources, args):
 		if targets_dict.get(match_string) == None:
 			name, ext = os.path.splitext(args.target_path)
 			path = f"{name}{match_string}{ext}"
-			targets_dict[match_string] = TargetImage(args.target_folder, path, args.target_format)
+			targets_dict[match_string] = TargetImage(args.target_folder, path, args.target_format, args.island_margin)
 		source.target_match = match_string
 	return (sources, targets_dict)
 
@@ -360,7 +365,7 @@ def main():
 	parser.add_argument("--target-format", type=str, required=False, default="RGBA", help="Image format.")
 	parser.add_argument("--regex-restrict", "-r", type=str, required=False, default=r".*?\.(?:png)", help="Only file paths that match this regex will be included (considers extensions)." )
 	parser.add_argument("--regex-separate", "-s", type=str, required=False, default=r"^", help="File names (not including extension) that match this regex will be separated into different images.")
-	parser.add_argument("--island-mode", "-ic", type=island_mode, required=False, default=IslandMode.NO_CROP, help=f"Defines how/if to separate pixel islands. Options: {[e.value for e in IslandMode]}")
+	parser.add_argument("--island-mode", "-ic", type=island_mode, required=False, default=IslandMode.CROP_FULL, help=f"Defines how/if to separate pixel islands. Options: {[e.value for e in IslandMode]}")
 	parser.add_argument("--island-margin", "-im", type=int, required=False, default=1, help="Islands above this threshold will have their regions expanded by this margin to include any surrounding pixels.")
 	parser.add_argument("--island-opacity", "-io", type=int, required=False, default=1, help="Pixels with an opacity above this threshold will be considered part of a contiguous island.")
 	parser.add_argument("--island-size", "-is", type=int, required=False, default=1, help="Islands with an area smaller than this will be discarded.")
@@ -370,7 +375,7 @@ def main():
 	sources = assign_image_sources(args)
 	sources, targets = assign_image_targets(sources, args)
 
-	target = TargetImage(args.target_folder, args.target_path, args.target_format)
+	target = TargetImage(args.target_folder, args.target_path, args.target_format, args.island_margin)
 	maps_data = dict()
 
 	print(f"Found {len(sources)} images to compile.")
@@ -383,7 +388,6 @@ def main():
 		print(f"Cropping image '{source.name}' ({i}/{len(sources)}) ...")
 		subsources = []
 		subsources.append(source.crop_islands(args))
-		subsources = [ source ]
 		j = 0
 		for subsource in subsources:
 			j += 1
@@ -401,7 +405,7 @@ def main():
 	json_data = {"maps": maps_data, "composites": comp_data}
 
 	with open(target.json_path, "w") as file:
-		json.dump(json_data, file, indent=4)
+		json.dump(json_data, file)
 
 	for k in targets.keys():
 		target = targets[k]
