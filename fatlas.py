@@ -237,7 +237,6 @@ class TargetImage(PathedImage):
 		except ValueError:
 			self.snaps.append(snap1)
 		snap2 = (source.target_offset[0], source.target_offset[1] + source.source_region.height + self.margin[1])
-		# snap2 = source.target_offset + (0, source.source_region.height + self.margin[1])
 		try:
 			_ = self.snaps.index(snap2)
 		except ValueError:
