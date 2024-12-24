@@ -295,6 +295,60 @@ def assign_image_targets(sources, args):
 	return (sources, targets_dict)
 
 
+def assign_comp_data(maps : dict) -> dict:
+	result = dict()
+	available = list()
+	components = set()
+	pattern = re.compile(r"((.+?)(?:_(\d+))?)_([lr])_(.)")
+	for k in maps.keys():
+		for entry in maps[k]:
+			available.append(entry["name"])
+			match = re.search(pattern, entry["name"])
+			
+			if not match:
+				print("One or more matches were not found in the regex; double check your pattern!")
+				return dict()
+
+			components.add(match.group(5))
+			if result.get(match.group(1)) == None:
+				is_latter_index = match.group(3) != None and int(match.group(3)) != 0
+
+				if is_latter_index: result[match.group(1)] = f"{match.group(2)}_{"0".zfill(len(match.group(3)))}"
+				else: result[match.group(1)] = None
+				
+	for k in result.keys():
+		comp = dict()
+		index_base_entry = result[k]
+
+		for c in components:
+			r_suffix = f"_r_{c}"
+			r_name = k + r_suffix
+			l_suffix = f"_l_{c}"
+			l_name = k + l_suffix
+			
+			i = 0
+			for m in maps.keys():
+				if i == 2: break
+				for entry in maps[m]:
+					if i == 2: break
+					if entry["name"] == r_name:
+						comp[r_suffix] = r_name
+						i += 1
+					elif entry["name"] == l_name:
+						comp[l_suffix] = l_name
+						i += 1
+
+			if index_base_entry != None and comp.get(r_suffix) == None and result[index_base_entry].get(r_suffix) != None:
+				comp[r_suffix] = result[index_base_entry][r_suffix]
+
+			if comp.get(l_suffix) == None and comp.get(r_suffix) != None:
+				comp[l_suffix] = comp[r_suffix]
+
+						
+		result[k] = comp
+	return result
+
+
 def main():
 	print("\n\n")
 
@@ -317,7 +371,7 @@ def main():
 	sources, targets = assign_image_targets(sources, args)
 
 	target = TargetImage(args.target_folder, args.target_path, args.target_format)
-	json_data = dict()
+	maps_data = dict()
 
 	print(f"Found {len(sources)} images to compile.")
 
@@ -329,6 +383,7 @@ def main():
 		print(f"Cropping image '{source.name}' ({i}/{len(sources)}) ...")
 		subsources = []
 		subsources.append(source.crop_islands(args))
+		subsources = [ source ]
 		j = 0
 		for subsource in subsources:
 			j += 1
@@ -336,13 +391,17 @@ def main():
 			print(f"Appending image '{source.name}' to '{target_file}' ({j}/{len(subsources)}) ...")
 			targets[source.target_match].add(subsource)
 
-			if json_data.get(target_file) == None:
-				json_data[target_file] = []
-			json_data[target_file].append(subsource.json_data)
+			if maps_data.get(target_file) == None:
+				maps_data[target_file] = []
+			maps_data[target_file].append(subsource.json_data)
 	print(f"Conglomeration complete.")
 
+	comp_data = assign_comp_data(maps_data)
+
+	json_data = {"maps": maps_data, "composites": comp_data}
+
 	with open(target.json_path, "w") as file:
-		json.dump(json_data, file)
+		json.dump(json_data, file, indent=4)
 
 	for k in targets.keys():
 		target = targets[k]
