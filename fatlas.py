@@ -26,7 +26,7 @@ class PathedImage:
 		self.full = os.path.join(root, file)
 		self.name, self.ext = os.path.splitext(file)
 
-	
+
 	def __str__(self):
 		return self.file
 
@@ -67,7 +67,7 @@ class SourceImage(PathedImage):
 		# self.bitmap.show()
 		return result
 
-	
+
 	@property
 	def json_data(self) -> dict:
 		return {
@@ -88,13 +88,13 @@ class SourceImage(PathedImage):
 	@property
 	def target_region(self) -> Rect:
 		return Rect(self.target_offset, self.source_region.size)
-	
+
 
 	def add_to_target(self):
 		print(f"Added {self.name} to '{self.target}'")
 		self.target.add(self)
 
-	
+
 	def crop_islands(self, args):
 		bitmap = self.get_opacity_bitmap(args.island_opacity)
 		pixels = bitmap.load()
@@ -112,7 +112,7 @@ class SourceImage(PathedImage):
 					continue
 				if pixels[px, py] == 0:
 					continue
-			
+
 				visited.add((px, py))
 				island_pixels.append((px, py))
 
@@ -133,7 +133,7 @@ class SourceImage(PathedImage):
 							island_rect = Rect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
 
 							if island_rect.w * island_rect.h < args.island_size: continue
-							
+
 							island_bitmap = Image.new("1", island_rect.size, color=0)
 							island_bitmap_pixels = island_bitmap.load()
 							island_pixels_set = set(island_pixels)
@@ -141,7 +141,7 @@ class SourceImage(PathedImage):
 								island_bitmap_pixels[px - min_x, py - min_y] = 1
 							result.append(SourceImage(self.root, self.file, island_rect, island_bitmap))
 			return result
-		
+
 		def crop_islands_accumulate():
 			rects = None
 			bitms = set()
@@ -182,8 +182,8 @@ class SourceImage(PathedImage):
 				result.sort(key=lambda image: image.source_region.w * image.source_region.h, reverse=True)
 				return result[0]
 		return self
-	
-		
+
+
 	def get_opacity_bitmap(self, threshold: int = 1):
 		bitmap = Image.new("1", self.image.size)
 		pixels = bitmap.load()
@@ -192,7 +192,7 @@ class SourceImage(PathedImage):
 			for y in range(bitmap.height):
 				_, _, _, a = self.image.getpixel((x, y))
 				pixels[x, y] = 0 if a < threshold else 1
-				
+
 		return bitmap
 
 
@@ -214,7 +214,7 @@ class TargetImage(PathedImage):
 		self.full_rect.size = new_size
 		self.image = ImageOps.expand(self.image, delta)
 
-	
+
 	def add(self, source: SourceImage):
 		size = source.source_region.size
 		snap = self.get_snap_for(size)
@@ -259,9 +259,9 @@ class TargetImage(PathedImage):
 		candidates.sort(key=lambda rect: not self.full_rect.contains(rect))
 		return (candidates[0][0], candidates[0][1])
 
-	
+
 	def save(self):
-		# os.makedirs(os.path.dirname(self.full), exist_ok=True)
+		os.makedirs(os.path.dirname(self.full), exist_ok=True)
 		print(f"Saving image to {self.full} ...")
 		self.image.save(self.full)
 		print(f"Saved image!")
@@ -278,7 +278,7 @@ def assign_image_sources(args):
 	result = []
 	pattern = re.compile(args.regex_restrict)
 	for root, dirs, files, in os.walk(args.source_folder):
-		for file in files:			
+		for file in files:
 			if re.search(pattern, file) == None: continue
 			source = SourceImage(root, file)
 			result.append(source)
@@ -308,7 +308,7 @@ def assign_comp_data(maps : dict) -> dict:
 		for entry in maps[k]:
 			available.append(entry["name"])
 			match = re.search(pattern, entry["name"])
-			
+
 			if not match:
 				print("One or more matches were not found in the regex; double check your pattern!")
 				return dict()
@@ -319,7 +319,7 @@ def assign_comp_data(maps : dict) -> dict:
 
 				if is_latter_index: result[match.group(1)] = f"{match.group(2)}_{"0".zfill(len(match.group(3)))}"
 				else: result[match.group(1)] = None
-				
+
 	for k in result.keys():
 		comp = dict()
 		index_base_entry = result[k]
@@ -329,7 +329,7 @@ def assign_comp_data(maps : dict) -> dict:
 			r_name = k + r_suffix
 			l_suffix = f"_l_{c}"
 			l_name = k + l_suffix
-			
+
 			i = 0
 			for m in maps.keys():
 				if i == 2: break
@@ -348,7 +348,7 @@ def assign_comp_data(maps : dict) -> dict:
 			if comp.get(l_suffix) == None and comp.get(r_suffix) != None:
 				comp[l_suffix] = comp[r_suffix]
 
-						
+
 		result[k] = comp
 	return result
 
@@ -381,7 +381,7 @@ def main():
 
 	print(f"Cropping images...")
 	i = 0
-	for source in sources: 
+	for source in sources:
 		i += 1
 		if args.test_limit > -1 and i > args.test_limit: break
 		print(f"Cropping image '{source.name}' ({i}/{len(sources)}) ...")
@@ -403,6 +403,7 @@ def main():
 
 	json_data = {"maps": maps_data, "composites": comp_data}
 
+	os.makedirs(os.path.dirname(target.json_path), exist_ok=True)
 	with open(target.json_path, "w") as file:
 		json.dump(json_data, file)
 
