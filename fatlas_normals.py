@@ -21,8 +21,6 @@ class TargetImage:
 
 
 	def generate(self, args):
-		print(f"Generating normal map for {self.file} ...")
-
 		os.makedirs(os.path.dirname(self.full), exist_ok=True)
 
 		sub_args = [args.laigter_path, "--no-gui", "-d", self.src_full, "-n"]
@@ -39,7 +37,7 @@ class TargetImage:
 		image.save(self.full)
 		os.remove(result_path)
 
-		print(f"Saved image to {self.full}")
+		# print(f"Saved image to {self.full}")
 
 
 def assign_image_sources(args):
@@ -76,7 +74,10 @@ def main():
 	source_paths = assign_image_sources(args)
 	targets = assign_image_targets(source_paths, args)
 
+	i = 0
 	for target in targets:
+		i += 1
+		print(f"Generating normal map for {target.file} ({i}/{len(targets)})...")
 		target.generate(args)
 
 
